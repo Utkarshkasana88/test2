@@ -1,0 +1,41 @@
+import requests, datetime, pytz
+
+HOST = "https://<your-workspace>"
+TOKEN = "<pat>"
+
+def ist_to_utc_epoch_ms(dt_str, fmt="%Y-%m-%d %H:%M:%S"):
+    # Example: "2025-08-01 00:00:00" in IST → epoch ms (UTC)
+    ist = pytz.timezone("Asia/Kolkata")
+    dt_local = ist.localize(datetime.datetime.strptime(dt_str, fmt))
+    dt_utc = dt_local.astimezone(pytz.UTC)
+    return int(dt_utc.timestamp() * 1000)
+
+def list_runs_all(start_ist, end_ist=None, job_id=None, limit=100):
+    params = {
+        "start_time_from": ist_to_utc_epoch_ms(start_ist),
+        "limit": limit,
+        "expand_tasks": "true",
+    }
+    if end_ist:
+        params["start_time_to"] = ist_to_utc_epoch_ms(end_ist)
+    if job_id:
+        params["job_id"] = job_id
+
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    url = f"{HOST}/api/2.1/jobs/runs/list"
+
+    runs = []
+    while True:
+        r = requests.get(url, headers=headers, params=params, timeout=60)
+        r.raise_for_status()
+        payload = r.json()
+        runs.extend(payload.get("runs", []))
+        nxt = payload.get("next_page_token")
+        if not nxt:
+            break
+        params["page_token"] = nxt   # keep other params the same
+    return runs
+
+# Example: from Aug 1, 2025 00:00 IST to Aug 14, 2025 23:59:59 IST
+all_runs = list_runs_all("2025-08-01 00:00:00", "2025-08-14 23:59:59")
+print(len(all_runs))
