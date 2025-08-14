@@ -39,3 +39,27 @@ def list_runs_all(start_ist, end_ist=None, job_id=None, limit=100):
 # Example: from Aug 1, 2025 00:00 IST to Aug 14, 2025 23:59:59 IST
 all_runs = list_runs_all("2025-08-01 00:00:00", "2025-08-14 23:59:59")
 print(len(all_runs))
+
+import requests
+
+HOST  = "https://adb-<id>.<region>.azuredatabricks.net"
+TOKEN = "<pat_or_aad>"
+
+def job_ids_by_name(job_name: str):
+    url = f"{HOST}/api/2.1/jobs/list"
+    params = {"name": job_name, "limit": 100}
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    ids, page = [], None
+    while True:
+        if page: params["page_token"] = page
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for j in data.get("jobs", []):
+            ids.append(j["job_id"])
+        page = data.get("next_page_token")
+        if not page: break
+    return ids
+
+print(job_ids_by_name("My Nightly Job"))
+
