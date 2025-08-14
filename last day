@@ -63,3 +63,93 @@ def job_ids_by_name(job_name: str):
 
 print(job_ids_by_name("My Nightly Job"))
 
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Dict, List, Optional, Tuple
+
+def _allocate_rounded(weights: Dict[str, float], total_cost: float, places: int = 2) -> Dict[str, float]:
+    """
+    Proportionally allocate total_cost by weights with rounding so the sum matches exactly.
+    """
+    if not weights:
+        return {}
+    total_w = sum(max(0.0, w) for w in weights.values())
+    if total_w == 0.0:
+        return {k: 0.0 for k in weights}
+
+    unit = Decimal(10) ** (-places)
+    totalD = Decimal(str(total_cost))
+    raw = {k: (totalD * Decimal(str(w)) / Decimal(str(total_w))) for k, w in weights.items()}
+    rounded = {k: v.quantize(unit, rounding=ROUND_HALF_UP) for k, v in raw.items()}
+    diff = totalD - sum(rounded.values())
+
+    if diff == 0:
+        return {k: float(v) for k, v in rounded.items()}
+
+    # Distribute remainder by largest fractional parts (ties arbitrary)
+    step = unit.copy_abs()
+    n_steps = int((diff / step).to_integral_value(rounding=ROUND_HALF_UP))
+    def frac(k: str) -> Decimal:
+        return (raw[k] - raw[k].quantize(unit, rounding=ROUND_HALF_UP)).copy_abs()
+
+    keys = list(rounded.keys())
+    keys.sort(key=lambda k: frac(k), reverse=(n_steps > 0))
+    sign = 1 if n_steps > 0 else -1
+    for i in range(abs(n_steps)):
+        k = keys[i % len(keys)]
+        rounded[k] = rounded[k] + (step * sign)
+
+    return {k: float(v) for k, v in rounded.items()}
+
+def distribute_cost_concurrent(
+    runs: List[Dict[str, float]],
+    total_cost: float,
+    include_idle: bool = False,
+    idle_label: str = "idle",
+    places: int = 2,
+) -> Dict[str, float]:
+    """
+    Concurrency-aware cost split via sweep-line over [start, end) timestamps.
+
+    runs: [{"id": "run1", "start": 0.0, "end": 1.0}, ...]  # any consistent time unit
+    include_idle: if True, idle segments (no active runs) get cost under `idle_label`.
+    """
+    events: List[Tuple[float, int, str]] = []  # (time, type, id), type: 0=start, 1=end
+    for r in runs:
+        s, e = float(r["start"]), float(r["end"])
+        if e <= s:
+            continue  # ignore zero/negative-length runs
+        rid = str(r["id"])
+        events.append((s, 0, rid))
+        events.append((e, 1, rid))
+    if not events:
+        return {str(r["id"]): 0.0 for r in runs}
+
+    events.sort(key=lambda x: (x[0], x[1]))
+    active: set[str] = set()
+    effective: Dict[str, float] = {str(r["id"]): 0.0 for r in runs}
+    idle_time = 0.0
+
+    prev_t: Optional[float] = None
+    for t, typ, rid in events:
+        if prev_t is not None and t > prev_t:
+            dt = t - prev_t
+            k = len(active)
+            if k == 0:
+                idle_time += dt
+            else:
+                share = dt / k
+                for a in active:
+                    effective[a] += share
+        if typ == 0:
+            active.add(rid)
+        else:
+            active.discard(rid)
+        prev_t = t
+
+    weights = dict(effective)
+    if include_idle and idle_time > 0:
+        weights[idle_label] = idle_time
+
+    return _allocate_rounded(weights, total_cost, places)
+
+
