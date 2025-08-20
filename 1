@@ -1,0 +1,41 @@
+import re
+
+# ---- settings ----
+catalogs = [r"main"]      # add more, e.g., ["main", "prod", "dev"]
+schemas_filter = None     # e.g., ["default", "sales"]; None = all schemas
+apply_changes = False     # set True to actually rewrite views
+
+# builtins that are often wrongly qualified as default.fn(
+builtins = ["upper","lower","trim","ltrim","rtrim","nvl","coalesce"]
+
+# regexes: replace default.fn(   -> system.builtin.fn(
+patterns = [(re.compile(rf"(?i)\bdefault\s*\.\s*{fn}\s*\("), f"system.builtin.{fn}(")
+            for fn in builtins]
+
+def list_rows(sql):
+    return [tuple(r) for r in spark.sql(sql).collect()]
+
+changed = []
+
+for (cat,) in list_rows("SHOW CATALOGS"):
+    if catalogs and cat not in catalogs: 
+        continue
+    for (_, sch) in list_rows(f"SHOW SCHEMAS IN `{cat}`"):
+        if schemas_filter and sch not in schemas_filter:
+            continue
+        for (_, _, vname) in list_rows(f"SHOW VIEWS IN `{cat}`.`{sch}`"):
+            stmt = list_rows(f"SHOW CREATE TABLE `{cat}`.`{sch}`.`{vname}`")[0][0]
+            new_stmt = stmt
+            for rx, repl in patterns:
+                new_stmt = rx.sub(repl, new_stmt)
+            if new_stmt != stmt and "CREATE VIEW" in new_stmt:
+                changed.append((cat, sch, vname))
+                print(f"Would fix: {cat}.{sch}.{vname}")
+                # Convert CREATE VIEW ... AS SELECT ... into just the SELECT body rewrite:
+                # Most times we can just run the full CREATE OR REPLACE with the patched text:
+                if apply_changes:
+                    patched = re.sub(r"(?i)^CREATE\s+VIEW", "CREATE OR REPLACE VIEW", new_stmt, count=1)
+                    spark.sql(patched)
+
+print(f"\nTotal views needing fix: {len(changed)}")
+for c in changed: print(" - " + ".".join(c))
