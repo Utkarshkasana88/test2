@@ -1,0 +1,62 @@
+package com.ubs.aqua.nonnative.telemetry.client;
+
+import com.microsoft.applicationinsights.TelemetryClient;
+import com.microsoft.applicationinsights.TelemetryConfiguration;
+
+import com.ubs.aqua.dbx.lrp.commonapi.persistent.StorageAPI;
+import com.ubs.aqua.dbx.lrp.commonapi.message.domain.MetadataConfig;
+import com.ubs.aqua.nonnative.telemetry.adapter.PropertyDataAdapter;
+import com.ubs.aqua.nonnative.telemetry.adapter.MetricDataAdapter;
+import com.ubs.aqua.nonnative.telemetry.domain.TelemetryEntities.NonNativeJobTelemetryData;
+
+import java.util.Map;
+
+public class TelemetryAPIImpl implements TelemetryAPI {
+
+    private final PropertyDataAdapter propertyDataAdapter = new PropertyDataAdapter();
+    private final MetricDataAdapter metricDataAdapter = new MetricDataAdapter();
+    private TelemetryClient telemetryClient;
+
+    /**
+     * Initialize telemetry using storage API + app ID
+     */
+    @Override
+    public void init(StorageAPI storageAPI, String appId) {
+
+        // 1. Extract Instrumentation Key / Connection string (your existing logic)
+        String instrumentationKey =
+                MetadataConfig.extract(storageAPI, appId)
+                        .getInstrumentationKey();  // or .getConnectionString()
+
+        // 2. Create Telemetry Configuration
+        TelemetryConfiguration configuration = TelemetryConfiguration.getActive();
+        configuration.setInstrumentationKey(instrumentationKey);
+
+        // 3. Create client instance
+        telemetryClient = new TelemetryClient(configuration);
+    }
+
+    /**
+     * Track event for your custom domain object
+     */
+    @Override
+    public void trackEvent(NonNativeJobTelemetryData data) {
+
+        // Adapt your domain → property map
+        Map<String, String> properties = propertyDataAdapter.adapt(data);
+        Map<String, Double> metrics = metricDataAdapter.adapt(data);
+
+        // event name comes from your domain object
+        telemetryClient.trackEvent(data.getEventName(), properties, metrics);
+    }
+
+    /**
+     * Flush telemetry
+     */
+    @Override
+    public void flush() {
+        if (telemetryClient != null) {
+            telemetryClient.flush();
+        }
+    }
+}
