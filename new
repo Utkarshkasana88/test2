@@ -1,19 +1,21 @@
 // =============================================================
-// 1. Import OpenTelemetry Libraries
+// 1. ALL REQUIRED IMPORTS (nothing missing)
 // =============================================================
 import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.trace.{Span, Tracer}
 import io.opentelemetry.api.common.Attributes
+import io.opentelemetry.api.trace.{Span, Tracer}
+
 import io.opentelemetry.sdk.OpenTelemetrySdk
+import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor
+
 import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter
-import io.opentelemetry.sdk.resources.Resource
+
 import io.opentelemetry.semconv.ResourceAttributes
 
 // =============================================================
-// 2. Your Application Insights Connection String
-// (You can replace this with your actual value or read from secrets)
+// 2. Application Insights Connection String
 // =============================================================
 val connStr =
   "InstrumentationKey=xxxx;" +
@@ -21,13 +23,11 @@ val connStr =
   "LiveEndpoint=https://dummy;" +
   "ApplicationId=xxxx"
 
-// =============================================================
-// 3. Helper function to extract values from connection string
-// =============================================================
+// Helper to extract fields
 def getValue(key: String): Option[String] =
   connStr.split(";").find(_.trim.startsWith(key + "=")).map(_.trim.replace(key + "=", ""))
 
-// Extract required ingestion endpoint
+// Extract Ingestion Endpoint
 val ingestionEndpoint = getValue("IngestionEndpoint").getOrElse(
   throw new IllegalArgumentException("IngestionEndpoint missing in connection string")
 )
@@ -38,32 +38,32 @@ val otlpEndpoint = ingestionEndpoint + "v2/track"
 println(s"Using Azure OTLP Endpoint: $otlpEndpoint")
 
 // =============================================================
-// 4. Configure OTLP Exporter
+// 3. Configure OTLP Exporter
 // =============================================================
 val otlpExporter = OtlpGrpcSpanExporter.builder()
   .setEndpoint(otlpEndpoint)
   .build()
 
 // =============================================================
-// 5. Create TracerProvider + Resource Attributes
+// 4. Configure Resource Attributes + Tracer Provider
 // =============================================================
+val resource = Resource.getDefault.merge(
+  Resource.create(
+    Attributes.builder()
+      .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
+      .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
+      .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
+      .build()
+  )
+)
+
 val tracerProvider = SdkTracerProvider.builder()
   .addSpanProcessor(BatchSpanProcessor.builder(otlpExporter).build())
-  .setResource(
-    Resource.getDefault.merge(
-      Resource.create(
-        Attributes.builder()
-          .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
-          .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
-          .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
-          .build()
-      )
-    )
-  )
+  .setResource(resource)
   .build()
 
 // =============================================================
-// 6. Initialize Global OpenTelemetry SDK
+// 5. Initialize OpenTelemetry
 // =============================================================
 val sdk = OpenTelemetrySdk.builder()
   .setTracerProvider(tracerProvider)
@@ -72,14 +72,14 @@ val sdk = OpenTelemetrySdk.builder()
 GlobalOpenTelemetry.set(sdk)
 
 // =============================================================
-// 7. Create a Tracer
+// 6. Create Tracer
 // =============================================================
 val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks.scala.test")
 
 // =============================================================
-// 8. Send 10 spans + 20 events to Azure App Insights
+// 7. Send 10 spans + 20 events
 // =============================================================
-println("Sending spans + events...")
+println("Sending 10 spans and 20 events...")
 
 for (i <- 1 to 10) {
 
@@ -91,7 +91,7 @@ for (i <- 1 to 10) {
 
   span.end()
 
-  println(s"Sent iteration $i")
+  println(s"Sent span iteration = $i")
 }
 
-println("All 10 spans + 20 events sent successfully to Azure Application Insights!")
+println("All spans & events sent successfully!")
