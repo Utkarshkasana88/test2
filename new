@@ -1,59 +1,77 @@
 import io.opentelemetry.api.GlobalOpenTelemetry
 import io.opentelemetry.api.trace.{Span, Tracer}
-import io.opentelemetry.api.common.{Attributes, AttributeKey}
 import io.opentelemetry.sdk.OpenTelemetrySdk
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor
 import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter
 import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.semconv.ResourceAttributes
+import io.opentelemetry.api.common.Attributes
 
-// 1. Azure AppInsights connection string
-val connectionString = connStr
+// -------------------------------------------------------
+// 1. Your connection string from Application Insights
+// -------------------------------------------------------
+val connStr = "InstrumentationKey=xxxx;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;LiveEndpoint=xxx/;ApplicationId="
 
-// 2. Extract ingestion endpoint
-val endpoint = connectionString
-  .split(";")
-  .find(_.startsWith("IngestionEndpoint="))
-  .get
-  .replace("IngestionEndpoint=", "") + "v2/track"
+// -------------------------------------------------------
+// 2. Parse connection string fields
+// -------------------------------------------------------
+def getValue(key: String): Option[String] =
+  connStr.split(";").find(_.trim.startsWith(key + "=")).map(_.trim.replace(key + "=", ""))
 
-// 3. Configure OTLP exporter
+val ingestionEndpoint = getValue("IngestionEndpoint").getOrElse(
+  throw new IllegalArgumentException("IngestionEndpoint missing in connection string")
+)
+
+// -------------------------------------------------------
+// 3. Azure OTLP endpoint mapping
+// Application Insights OTLP = <IngestionEndpoint>/v2/track
+// -------------------------------------------------------
+val otlpEndpoint = ingestionEndpoint + "v2/track"
+
+// -------------------------------------------------------
+// 4. Configure OTLP exporter
+// -------------------------------------------------------
 val otlpExporter = OtlpGrpcSpanExporter.builder()
-  .setEndpoint(endpoint)
+  .setEndpoint(otlpEndpoint)
   .build()
 
-// 4. Create tracer provider with metadata
+// -------------------------------------------------------
+// 5. Create tracer provider
+// -------------------------------------------------------
 val tracerProvider = SdkTracerProvider.builder()
   .addSpanProcessor(BatchSpanProcessor.builder(otlpExporter).build())
   .setResource(
     Resource.getDefault.merge(
       Resource.create(
-        Attributes.of(
-          ResourceAttributes.SERVICE_NAME, "databricks-scala-service",
-          ResourceAttributes.CLOUD_PROVIDER, "azure",
-          ResourceAttributes.CLOUD_PLATFORM, "databricks"
-        )
+        Attributes.builder()
+          .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
+          .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
+          .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
+          .build()
       )
     )
   )
   .build()
 
-// 5. Register global OpenTelemetry
+// -------------------------------------------------------
+// 6. Register global OTel SDK
+// -------------------------------------------------------
 val sdk = OpenTelemetrySdk.builder()
   .setTracerProvider(tracerProvider)
   .build()
 
 GlobalOpenTelemetry.set(sdk)
 
-// 6. Create tracer
+// -------------------------------------------------------
+// 7. Create tracer & send a sample span
+// -------------------------------------------------------
 val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks.scala.test")
 
-// 7. Send a sample trace
 val span: Span = tracer.spanBuilder("sample-databricks-operation").startSpan()
 span.addEvent("Processing started")
-Thread.sleep(500)
-span.addEvent("Processing ended")
+Thread.sleep(300)
+span.addEvent("Processing finished")
 span.end()
 
-println("Trace sent to Azure Application Insights via OTLP!")
+println(s"Trace sent to Azure AppInsights via OTLP → $otlpEndpoint")
