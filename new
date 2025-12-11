@@ -1,97 +1,80 @@
 // =============================================================
-// 1. ALL REQUIRED IMPORTS (nothing missing)
+// 1. IMPORTS
 // =============================================================
+import com.azure.opentelemetry.exporter.azuremonitor.AzureMonitorExporterBuilder
 import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.trace.{Span, Tracer}
-
 import io.opentelemetry.sdk.OpenTelemetrySdk
 import io.opentelemetry.sdk.resources.Resource
+import io.opentelemetry.semconv.ResourceAttributes
+import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor
-
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter
-
-import io.opentelemetry.semconv.ResourceAttributes
 
 // =============================================================
 // 2. Application Insights Connection String
 // =============================================================
-val connStr =
+val connectionString =
   "InstrumentationKey=xxxx;" +
-  "IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;" +
-  "LiveEndpoint=https://dummy;" +
+  "IngestionEndpoint=https://centralindia.in.applicationinsights.azure.com/;" +
+  "LiveEndpoint=https://centralindia.livediagnostics.monitor.azure.com/;" +
   "ApplicationId=xxxx"
 
-// Helper to extract fields
-def getValue(key: String): Option[String] =
-  connStr.split(";").find(_.trim.startsWith(key + "=")).map(_.trim.replace(key + "=", ""))
+// =============================================================
+// 3. Use Azure MONITOR Exporter (Correct Exporter)
+// =============================================================
+val exporter =
+  new AzureMonitorExporterBuilder()
+    .connectionString(connectionString)
+    .buildOtlpTraceExporter()
 
-// Extract Ingestion Endpoint
-val ingestionEndpoint = getValue("IngestionEndpoint").getOrElse(
-  throw new IllegalArgumentException("IngestionEndpoint missing in connection string")
+// =============================================================
+// 4. Resource Attributes
+// =============================================================
+val resource = Resource.create(
+  Attributes.builder()
+    .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
+    .put(ResourceAttributes.SERVICE_NAMESPACE, "demo")
+    .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
+    .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
+    .build()
 )
 
-// Build Azure OTLP endpoint
-val otlpEndpoint = ingestionEndpoint + "v2/track"
-
-println(s"Using Azure OTLP Endpoint: $otlpEndpoint")
-
 // =============================================================
-// 3. Configure OTLP Exporter
+// 5. Tracer Provider
 // =============================================================
-val otlpExporter = OtlpGrpcSpanExporter.builder()
-  .setEndpoint(otlpEndpoint)
-  .build()
-
-// =============================================================
-// 4. Configure Resource Attributes + Tracer Provider
-// =============================================================
-val resource = Resource.getDefault.merge(
-  Resource.create(
-    Attributes.builder()
-      .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
-      .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
-      .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
-      .build()
-  )
-)
-
 val tracerProvider = SdkTracerProvider.builder()
-  .addSpanProcessor(BatchSpanProcessor.builder(otlpExporter).build())
+  .addSpanProcessor(BatchSpanProcessor.builder(exporter).build())
   .setResource(resource)
   .build()
 
-// =============================================================
-// 5. Initialize OpenTelemetry
-// =============================================================
 val sdk = OpenTelemetrySdk.builder()
   .setTracerProvider(tracerProvider)
-  .build()
-
-GlobalOpenTelemetry.set(sdk)
+  .buildAndRegisterGlobal()
 
 // =============================================================
-// 6. Create Tracer
+// 6. Tracer
 // =============================================================
-val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks.scala.test")
+val tracer = sdk.getTracer("databricks.scala.test")
 
 // =============================================================
-// 7. Send 10 spans + 20 events
+// 7. SEND SPANS + EVENTS (10 spans → 20 events)
 // =============================================================
-println("Sending 10 spans and 20 events...")
+println("Sending spans to Azure Application Insights...")
 
 for (i <- 1 to 10) {
-
   val span = tracer.spanBuilder(s"sample-operation-$i").startSpan()
 
-  span.addEvent(s"Event number $i started")
+  span.addEvent(s"event-start-$i")
   Thread.sleep(200)
-  span.addEvent(s"Event number $i finished")
+  span.addEvent(s"event-end-$i")
 
   span.end()
-
   println(s"Sent span iteration = $i")
 }
 
-println("All spans & events sent successfully!")
+// Force flush before exit
+tracerProvider.forceFlush()
+tracerProvider.shutdown()
+
+println("Spans delivered successfully!")
