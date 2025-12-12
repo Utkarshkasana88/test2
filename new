@@ -1,40 +1,36 @@
 // =============================================================
 // 1. IMPORTS
 // =============================================================
+import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporter
 import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.trace.{Span, Tracer}
+import io.opentelemetry.api.trace.{Tracer, Span}
 import io.opentelemetry.api.common.Attributes
 
 import io.opentelemetry.sdk.OpenTelemetrySdk
-import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor
-
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter
+import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.semconv.ResourceAttributes
 
 // =============================================================
-// 2. Point to your OTEL COLLECTOR
+// 2. Azure App Insights Connection String
 // =============================================================
-
-// Example:
-// Collector running at http://<ip>:4317 or k8s service
-val collectorEndpoint = "http://<otel-collector-host>:4317"   // OTLP gRPC port
-
-println(s"Using Collector OTLP endpoint = $collectorEndpoint")
-
-val otlpExporter = OtlpGrpcSpanExporter.builder()
-  .setEndpoint(collectorEndpoint)
-  .build()
+val connectionString =
+  "InstrumentationKey=xxxx;" +
+  "IngestionEndpoint=https://centralindia.in.applicationinsights.azure.com/"
 
 // =============================================================
-// 3. Resource (Service Metadata)
+// 3. Create Azure Monitor Exporter
+// =============================================================
+val exporter = new AzureMonitorExporter(connectionString)
+
+// =============================================================
+// 4. Create OpenTelemetry Resource Metadata
 // =============================================================
 val resource = Resource.getDefault.merge(
   Resource.create(
     Attributes.builder()
       .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
-      .put(ResourceAttributes.SERVICE_NAMESPACE, "demo")
       .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
       .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
       .build()
@@ -42,10 +38,10 @@ val resource = Resource.getDefault.merge(
 )
 
 // =============================================================
-// 4. TRACER PROVIDER
+// 5. Create Tracer Provider → Add AzureMonitorExporter
 // =============================================================
 val tracerProvider = SdkTracerProvider.builder()
-  .addSpanProcessor(BatchSpanProcessor.builder(otlpExporter).build())
+  .addSpanProcessor(BatchSpanProcessor.builder(exporter).build())
   .setResource(resource)
   .build()
 
@@ -54,30 +50,26 @@ val sdk = OpenTelemetrySdk.builder()
   .buildAndRegisterGlobal()
 
 // =============================================================
-// 5. GET TRACER
+// 6. Get Tracer
 // =============================================================
-val tracer: Tracer = sdk.getTracer("databricks.otel.collector.test")
+val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks.monitor.test")
 
 // =============================================================
-// 6. SEND 10 SPANS TO COLLECTOR
+// 7. Send Spans — 10 spans with events
 // =============================================================
-println("Sending spans via OTLP to Collector...")
+println("Sending spans to Azure Application Insights...")
 
 for (i <- 1 to 10) {
-  val span = tracer.spanBuilder(s"collector-span-$i").startSpan()
-
+  val span = tracer.spanBuilder(s"ai-span-$i").startSpan()
   span.addEvent(s"event-start-$i")
-  Thread.sleep(200)
+  Thread.sleep(100)
   span.addEvent(s"event-end-$i")
-
   span.end()
-  println(s"Sent span = $i")
+  println(s"Sent span $i")
 }
 
-// =============================================================
-// 7. FLUSH + SHUTDOWN
-// =============================================================
+// Flush + Shutdown
 tracerProvider.forceFlush()
 tracerProvider.shutdown()
 
-println("All spans sent successfully to Collector!")
+println("All spans sent!")
