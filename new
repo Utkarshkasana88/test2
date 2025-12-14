@@ -1,75 +1,30 @@
-// =============================================================
-// 1. IMPORTS
-// =============================================================
-import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporter
-import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.trace.{Tracer, Span}
-import io.opentelemetry.api.common.Attributes
+<dependencies>
+    <!-- OpenTelemetry SDK auto-config -->
+    <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-sdk-autoconfigure</artifactId>
+        <version>1.36.0</version>
+    </dependency>
 
-import io.opentelemetry.sdk.OpenTelemetrySdk
-import io.opentelemetry.sdk.trace.SdkTracerProvider
-import io.opentelemetry.sdk.trace.export.BatchSpanProcessor
-import io.opentelemetry.sdk.resources.Resource
-import io.opentelemetry.semconv.ResourceAttributes
+    <!-- Azure Monitor OpenTelemetry Exporter -->
+    <dependency>
+        <groupId>com.azure</groupId>
+        <artifactId>azure-monitor-opentelemetry-exporter</artifactId>
+        <version>1.0.0-beta.25</version>
+    </dependency>
 
-// =============================================================
-// 2. Azure App Insights Connection String
-// =============================================================
-val connectionString =
-  "InstrumentationKey=xxxx;" +
-  "IngestionEndpoint=https://centralindia.in.applicationinsights.azure.com/"
+    <!-- (Optional) annotations -->
+    <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-api</artifactId>
+        <version>1.36.0</version>
+    </dependency>
+</dependencies>
 
-// =============================================================
-// 3. Create Azure Monitor Exporter
-// =============================================================
-val exporter = new AzureMonitorExporter(connectionString)
 
-// =============================================================
-// 4. Create OpenTelemetry Resource Metadata
-// =============================================================
-val resource = Resource.getDefault.merge(
-  Resource.create(
-    Attributes.builder()
-      .put(ResourceAttributes.SERVICE_NAME, "databricks-scala-service")
-      .put(ResourceAttributes.CLOUD_PROVIDER, "azure")
-      .put(ResourceAttributes.CLOUD_PLATFORM, "databricks")
-      .build()
-  )
-)
-
-// =============================================================
-// 5. Create Tracer Provider → Add AzureMonitorExporter
-// =============================================================
-val tracerProvider = SdkTracerProvider.builder()
-  .addSpanProcessor(BatchSpanProcessor.builder(exporter).build())
-  .setResource(resource)
-  .build()
-
-val sdk = OpenTelemetrySdk.builder()
-  .setTracerProvider(tracerProvider)
-  .buildAndRegisterGlobal()
-
-// =============================================================
-// 6. Get Tracer
-// =============================================================
-val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks.monitor.test")
-
-// =============================================================
-// 7. Send Spans — 10 spans with events
-// =============================================================
-println("Sending spans to Azure Application Insights...")
-
-for (i <- 1 to 10) {
-  val span = tracer.spanBuilder(s"ai-span-$i").startSpan()
-  span.addEvent(s"event-start-$i")
-  Thread.sleep(100)
-  span.addEvent(s"event-end-$i")
-  span.end()
-  println(s"Sent span $i")
-}
-
-// Flush + Shutdown
-tracerProvider.forceFlush()
-tracerProvider.shutdown()
-
-println("All spans sent!")
+export APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=XXXX;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/"
+export OTEL_TRACES_EXPORTER=azuremonitor
+export OTEL_METRICS_EXPORTER=azuremonitor
+export OTEL_LOGS_EXPORTER=azuremonitor
+export OTEL_SERVICE_NAME=my-java-service
+export OTEL_RESOURCE_ATTRIBUTES=service.namespace=payments,service.version=1.0.0
