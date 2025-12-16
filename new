@@ -1,5 +1,5 @@
 // =============================================================
-// 1. IMPORTS (only from listed dependencies)
+// 1️⃣ Imports
 // =============================================================
 import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporter
 
@@ -15,66 +15,97 @@ import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.semconv.ResourceAttributes
 
 // =============================================================
-// 2. Application Insights Connection String
+// 2️⃣ Connection String
 // =============================================================
 val connectionString =
   "InstrumentationKey=xxxx;" +
   "IngestionEndpoint=https://centralindia.in.applicationinsights.azure.com/"
 
-// =============================================================
-// 3. Azure Monitor Exporter
-// =============================================================
-val exporter = new AzureMonitorExporter(connectionString)
+println("Starting Azure Monitor OpenTelemetry integration...")
 
-// =============================================================
-// 4. Resource (service metadata)
-// =============================================================
-val resource = Resource.create(
-  Attributes.builder()
-    .put(ResourceAttributes.SERVICE_NAME, "scala-custom-event-service")
+try {
+  // =============================================================
+  // 3️⃣ Create Exporter
+  // =============================================================
+  println("Creating Azure Monitor Exporter...")
+  val exporter = new AzureMonitorExporter(connectionString)
+
+  // =============================================================
+  // 4️⃣ Create Resource (Service Metadata)
+  // =============================================================
+  println("Creating Resource with service name...")
+  val resource = Resource.create(
+    Attributes.builder()
+      .put(ResourceAttributes.SERVICE_NAME, "scala-custom-event-service")
+      .build()
+  )
+
+  // =============================================================
+  // 5️⃣ Configure Tracer Provider
+  // =============================================================
+  println("Configuring SdkTracerProvider...")
+  val tracerProvider = SdkTracerProvider.builder()
+    .addSpanProcessor(SimpleSpanProcessor.create(exporter))
+    .setResource(resource)
     .build()
-)
 
-// =============================================================
-// 5. Tracer Provider
-// =============================================================
-val tracerProvider = SdkTracerProvider.builder()
-  .addSpanProcessor(SimpleSpanProcessor.create(exporter))
-  .setResource(resource)
-  .build()
+  val sdk = OpenTelemetrySdk.builder()
+    .setTracerProvider(tracerProvider)
+    .buildAndRegisterGlobal()
 
-OpenTelemetrySdk.builder()
-  .setTracerProvider(tracerProvider)
-  .buildAndRegisterGlobal()
+  // =============================================================
+  // 6️⃣ Get Tracer
+  // =============================================================
+  println("Getting Tracer from GlobalOpenTelemetry...")
+  val tracer: Tracer = GlobalOpenTelemetry.getTracer("custom-event-demo")
 
-// =============================================================
-// 6. Tracer
-// =============================================================
-val tracer: Tracer =
-  GlobalOpenTelemetry.getTracer("custom-event-demo")
+  // =============================================================
+  // 7️⃣ Send Multiple Spans with Custom Events
+  // =============================================================
+  for (i <- 1 to 5) {
+    try {
+      println(s"Creating span #$i...")
+      val span = tracer.spanBuilder(s"business-operation-$i").startSpan()
 
-// =============================================================
-// 7. Create Span + Custom Event
-// =============================================================
-val span = tracer.spanBuilder("business-operation").startSpan()
+      span.addEvent(
+        "OrderPlaced",
+        Attributes.builder()
+          .put("order.id", s"ORD-$i")
+          .put("customer.id", s"CUST-$i")
+          .put("order.amount", 1000 + i * 100)
+          .put("currency", "INR")
+          .put("status", "SUCCESS")
+          .build()
+      )
 
-span.addEvent(
-  "OrderPlaced",
-  Attributes.builder()
-    .put("order.id", "ORD-1001")
-    .put("customer.id", "CUST-42")
-    .put("order.amount", 1999.99)
-    .put("currency", "INR")
-    .put("status", "SUCCESS")
-    .build()
-)
+      span.end()
+      println(s"Span #$i sent successfully.")
 
-span.end()
+    } catch {
+      case e: Exception =>
+        println(s"Exception while sending span #$i: ${e.getMessage}")
+        e.printStackTrace()
+    }
+  }
 
-// =============================================================
-// 8. Flush and Shutdown (IMPORTANT)
-// =============================================================
-tracerProvider.forceFlush()
-tracerProvider.shutdown()
+  // =============================================================
+  // 8️⃣ Force Flush & Shutdown
+  // =============================================================
+  try {
+    println("Flushing and shutting down tracer provider...")
+    tracerProvider.forceFlush()
+    tracerProvider.shutdown()
+    println("Tracer provider shutdown completed successfully.")
+  } catch {
+    case e: Exception =>
+      println("Exception during flush/shutdown: " + e.getMessage)
+      e.printStackTrace()
+  }
 
-println("Custom event successfully sent to Application Insights")
+  println("All done! Custom events should appear in Application Insights soon.")
+
+} catch {
+  case e: Exception =>
+    println("Unexpected exception in OpenTelemetry setup: " + e.getMessage)
+    e.printStackTrace()
+}
