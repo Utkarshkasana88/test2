@@ -1,5 +1,33 @@
-APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxxx;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/
-OTEL_TRACES_EXPORTER=azure_monitor
-OTEL_METRICS_EXPORTER=azure_monitor
-OTEL_LOGS_EXPORTER=azure_monitor
-OTEL_SERVICE_NAME=databricks-scala-otel
+import io.opentelemetry.api.GlobalOpenTelemetry
+import io.opentelemetry.api.common.Attributes
+import io.opentelemetry.api.trace.Tracer
+import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
+
+object DatabricksOtelApp {
+
+  def main(args: Array[String]): Unit = {
+
+    println("Initializing OpenTelemetry via Azure autoconfigure")
+
+    AutoConfiguredOpenTelemetrySdk.initialize()
+
+    val tracer: Tracer =
+      GlobalOpenTelemetry.getTracer("databricks-scala-service")
+
+    val span = tracer.spanBuilder("test-span").startSpan()
+
+    span.addEvent(
+      "custom-event",
+      Attributes.builder()
+        .put("source", "databricks")
+        .put("type", "test")
+        .build()
+    )
+
+    Thread.sleep(200)
+    span.end()
+
+    println("Span + event sent to Application Insights")
+    Thread.sleep(5000) // allow export
+  }
+}
