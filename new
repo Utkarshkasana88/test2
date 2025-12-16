@@ -1,30 +1,80 @@
-<dependencies>
-    <!-- OpenTelemetry SDK auto-config -->
-    <dependency>
-        <groupId>io.opentelemetry</groupId>
-        <artifactId>opentelemetry-sdk-autoconfigure</artifactId>
-        <version>1.36.0</version>
-    </dependency>
+// =============================================================
+// 1. IMPORTS (only from listed dependencies)
+// =============================================================
+import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporter
 
-    <!-- Azure Monitor OpenTelemetry Exporter -->
-    <dependency>
-        <groupId>com.azure</groupId>
-        <artifactId>azure-monitor-opentelemetry-exporter</artifactId>
-        <version>1.0.0-beta.25</version>
-    </dependency>
+import io.opentelemetry.api.GlobalOpenTelemetry
+import io.opentelemetry.api.trace.Tracer
+import io.opentelemetry.api.common.Attributes
 
-    <!-- (Optional) annotations -->
-    <dependency>
-        <groupId>io.opentelemetry</groupId>
-        <artifactId>opentelemetry-api</artifactId>
-        <version>1.36.0</version>
-    </dependency>
-</dependencies>
+import io.opentelemetry.sdk.OpenTelemetrySdk
+import io.opentelemetry.sdk.trace.SdkTracerProvider
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor
+import io.opentelemetry.sdk.resources.Resource
 
+import io.opentelemetry.semconv.ResourceAttributes
 
-export APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=XXXX;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/"
-export OTEL_TRACES_EXPORTER=azuremonitor
-export OTEL_METRICS_EXPORTER=azuremonitor
-export OTEL_LOGS_EXPORTER=azuremonitor
-export OTEL_SERVICE_NAME=my-java-service
-export OTEL_RESOURCE_ATTRIBUTES=service.namespace=payments,service.version=1.0.0
+// =============================================================
+// 2. Application Insights Connection String
+// =============================================================
+val connectionString =
+  "InstrumentationKey=xxxx;" +
+  "IngestionEndpoint=https://centralindia.in.applicationinsights.azure.com/"
+
+// =============================================================
+// 3. Azure Monitor Exporter
+// =============================================================
+val exporter = new AzureMonitorExporter(connectionString)
+
+// =============================================================
+// 4. Resource (service metadata)
+// =============================================================
+val resource = Resource.create(
+  Attributes.builder()
+    .put(ResourceAttributes.SERVICE_NAME, "scala-custom-event-service")
+    .build()
+)
+
+// =============================================================
+// 5. Tracer Provider
+// =============================================================
+val tracerProvider = SdkTracerProvider.builder()
+  .addSpanProcessor(SimpleSpanProcessor.create(exporter))
+  .setResource(resource)
+  .build()
+
+OpenTelemetrySdk.builder()
+  .setTracerProvider(tracerProvider)
+  .buildAndRegisterGlobal()
+
+// =============================================================
+// 6. Tracer
+// =============================================================
+val tracer: Tracer =
+  GlobalOpenTelemetry.getTracer("custom-event-demo")
+
+// =============================================================
+// 7. Create Span + Custom Event
+// =============================================================
+val span = tracer.spanBuilder("business-operation").startSpan()
+
+span.addEvent(
+  "OrderPlaced",
+  Attributes.builder()
+    .put("order.id", "ORD-1001")
+    .put("customer.id", "CUST-42")
+    .put("order.amount", 1999.99)
+    .put("currency", "INR")
+    .put("status", "SUCCESS")
+    .build()
+)
+
+span.end()
+
+// =============================================================
+// 8. Flush and Shutdown (IMPORTANT)
+// =============================================================
+tracerProvider.forceFlush()
+tracerProvider.shutdown()
+
+println("Custom event successfully sent to Application Insights")
