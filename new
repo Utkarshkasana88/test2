@@ -1,63 +1,71 @@
-// =============================================================
-// 1. Imports
-// =============================================================
-import com.azure.monitor.opentelemetry.autoconfigure.AutoConfiguredOpenTelemetrySdk
-import io.opentelemetry.api.metrics.Meter
-import io.opentelemetry.api.metrics.LongCounter
+// ==============================
+// Imports
+// ==============================
+import io.opentelemetry.api.GlobalOpenTelemetry
+import io.opentelemetry.api.trace.Tracer
 import io.opentelemetry.api.common.Attributes
 
-// =============================================================
-// 2. Initialize AutoConfigured OpenTelemetry
-// =============================================================
-val autoSdk = try {
-  println("Initializing Azure Monitor OpenTelemetry AutoConfigured SDK...")
-  AutoConfiguredOpenTelemetrySdk.builder().build()
-} catch {
-  case e: Exception =>
-    println(s"Error initializing AutoConfiguredOpenTelemetrySdk: ${e.getMessage}")
-    throw e
-}
+import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
 
-val openTelemetry = autoSdk.getOpenTelemetrySdk()
-println("OpenTelemetry SDK initialized successfully.")
+// ==============================
+// Initialize OpenTelemetry (AUTOCONFIGURE)
+// ==============================
+val autoSdk =
+  AutoConfiguredOpenTelemetrySdk.builder()
+    .build()
 
-// =============================================================
-// 3. Create Meter and Custom Metric
-// =============================================================
-val meter: Meter = openTelemetry.getMeter("databricks-custom-metrics")
+val openTelemetry = autoSdk.getOpenTelemetrySdk
 
-val requestCounter: LongCounter = meter.counterBuilder("request_count_total")
-  .setDescription("Total number of requests processed")
-  .setUnit("1")
-  .build()
+// Make it global (important)
+GlobalOpenTelemetry.set(openTelemetry)
 
-println("Custom metric 'request_count_total' created.")
+// ==============================
+// Create Tracer
+// ==============================
+val tracer: Tracer =
+  GlobalOpenTelemetry.getTracer("databricks.custom.event")
 
-// =============================================================
-// 4. Record Metric Values
-// =============================================================
-try {
-  println("Recording custom metric values...")
+println("OpenTelemetry initialized successfully")
 
-  // Example: record multiple events
-  for (i <- 1 to 5) {
-    requestCounter.add(1, Attributes.builder()
-      .put("method", if (i % 2 == 0) "POST" else "GET")
-      .put("status", if (i % 2 == 0) "201" else "200")
-      .build()
+// ==============================
+// Send custom events (10 times)
+// ==============================
+for (i <- 1 to 10) {
+  try {
+    val span = tracer.spanBuilder(s"custom-operation-$i").startSpan()
+
+    span.addEvent(
+      "custom-event-start",
+      Attributes.builder()
+        .put("iteration", i)
+        .put("source", "databricks")
+        .build()
     )
-    println(s"Recorded metric for iteration $i")
-  }
 
-} catch {
-  case e: Exception =>
-    println(s"Error recording metrics: ${e.getMessage}")
+    Thread.sleep(200)
+
+    span.addEvent(
+      "custom-event-end",
+      Attributes.builder()
+        .put("status", "success")
+        .build()
+    )
+
+    span.end()
+
+    println(s"Sent custom event iteration = $i")
+
+  } catch {
+    case e: Exception =>
+      println(s"Error sending telemetry for iteration $i")
+      e.printStackTrace()
+  }
 }
 
-// =============================================================
-// 5. Allow Export
-// =============================================================
-println("Waiting 65 seconds for metrics to export to Application Insights...")
-Thread.sleep(65000) // must be >= metric export interval (default ~60s)
+// ==============================
+// Flush & shutdown (VERY IMPORTANT in Databricks)
+// ==============================
+autoSdk.getOpenTelemetrySdk.getSdkTracerProvider.forceFlush()
+autoSdk.getOpenTelemetrySdk.getSdkTracerProvider.shutdown()
 
-println("Done. Check your Application Insights 'customMetrics' table for recorded values.")
+println("Telemetry flushed and shutdown complete")
