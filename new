@@ -1,33 +1,61 @@
+import com.azure.monitor.opentelemetry.autoconfigure.AzureMonitorAutoconfigure
 import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.trace.Tracer
-import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
+import io.opentelemetry.api.common.Attributes
+import io.opentelemetry.api.metrics.Meter
+import io.opentelemetry.api.metrics.common.Labels
 
-object DatabricksOtelApp {
+object DatabricksAzureMonitorTest {
 
   def main(args: Array[String]): Unit = {
 
-    println("Initializing OpenTelemetry via Azure autoconfigure")
+    try {
+      println("=== Initializing Azure Monitor Autoconfigure ===")
 
-    AutoConfiguredOpenTelemetrySdk.initialize()
+      // This reads env vars automatically and sets up SDK + exporters
+      AzureMonitorAutoconfigure.initialize()
 
-    val tracer: Tracer =
-      GlobalOpenTelemetry.getTracer("databricks-scala-service")
+      println("Azure Monitor OpenTelemetry initialized successfully")
 
-    val span = tracer.spanBuilder("test-span").startSpan()
+      val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks-otel-tracer")
+      val meter: Meter = GlobalOpenTelemetry.getMeter("databricks-otel-meter")
 
-    span.addEvent(
-      "custom-event",
-      Attributes.builder()
-        .put("source", "databricks")
-        .put("type", "test")
+      // Send 5 test spans
+      for (i <- 1 to 5) {
+        val span = tracer.spanBuilder(s"custom-span-$i")
+          .setAttribute("iteration", i)
+          .startSpan()
+
+        span.addEvent(
+          "custom-event",
+          Attributes.builder()
+            .put("source", "databricks")
+            .put("iteration", i)
+            .build()
+        )
+
+        Thread.sleep(200)
+        span.end()
+        println(s"Sent span $i")
+      }
+
+      // Send a simple custom metric
+      val counter = meter.counterBuilder("databricks_custom_counter")
+        .setDescription("Demo custom metric")
+        .setUnit("1")
         .build()
-    )
 
-    Thread.sleep(200)
-    span.end()
+      counter.add(10, Labels.of("env", "databricks"))
+      println("Custom metric sent")
 
-    println("Span + event sent to Application Insights")
-    Thread.sleep(5000) // allow export
+      // Allow time for telemetry export
+      Thread.sleep(5000)
+      println("All telemetry sent successfully!")
+
+    } catch {
+      case ex: Throwable =>
+        println("❌ Error initializing Azure Monitor OpenTelemetry")
+        ex.printStackTrace()
+    }
   }
 }
