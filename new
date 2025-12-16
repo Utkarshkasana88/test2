@@ -1,37 +1,63 @@
+// =============================================================
+// 1. Imports
+// =============================================================
+import com.azure.monitor.opentelemetry.autoconfigure.AutoConfiguredOpenTelemetrySdk
 import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.api.metrics.LongCounter
 import io.opentelemetry.api.common.Attributes
-import com.azure.monitor.opentelemetry.autoconfigure.AutoConfiguredOpenTelemetrySdk
 
-object CustomMetricExample {
-  def main(args: Array[String]): Unit = {
-    println("Starting custom metric example...")
-
-    // Bootstraps OpenTelemetry from AUTOCONFIGURE
-    val autoSdk = AutoConfiguredOpenTelemetrySdk.builder().build()
-    val openTelemetry = autoSdk.getOpenTelemetrySdk()
-
-    // Create a Meter
-    val meter: Meter = openTelemetry.getMeter("scala-custom-metrics")
-
-    // Create a LongCounter metric
-    val requestCounter: LongCounter =
-      meter.counterBuilder("request_count_total")
-        .setDescription("Total number of requests processed")
-        .setUnit("1")
-        .build()
-
-    println("Recording metric values...")
-
-    // Record some metric values
-    requestCounter.add(1, Attributes.builder().put("method", "GET").put("status", "200").build())
-    requestCounter.add(1, Attributes.builder().put("method", "POST").put("status", "201").build())
-
-    println("Metrics recorded. Waiting to export...")
-
-    // Sleep briefly to allow metric exporter to export data
-    Thread.sleep(65000) // must be >= metric export interval (e.g., 60s)
-
-    println("Done.")
-  }
+// =============================================================
+// 2. Initialize AutoConfigured OpenTelemetry
+// =============================================================
+val autoSdk = try {
+  println("Initializing Azure Monitor OpenTelemetry AutoConfigured SDK...")
+  AutoConfiguredOpenTelemetrySdk.builder().build()
+} catch {
+  case e: Exception =>
+    println(s"Error initializing AutoConfiguredOpenTelemetrySdk: ${e.getMessage}")
+    throw e
 }
+
+val openTelemetry = autoSdk.getOpenTelemetrySdk()
+println("OpenTelemetry SDK initialized successfully.")
+
+// =============================================================
+// 3. Create Meter and Custom Metric
+// =============================================================
+val meter: Meter = openTelemetry.getMeter("databricks-custom-metrics")
+
+val requestCounter: LongCounter = meter.counterBuilder("request_count_total")
+  .setDescription("Total number of requests processed")
+  .setUnit("1")
+  .build()
+
+println("Custom metric 'request_count_total' created.")
+
+// =============================================================
+// 4. Record Metric Values
+// =============================================================
+try {
+  println("Recording custom metric values...")
+
+  // Example: record multiple events
+  for (i <- 1 to 5) {
+    requestCounter.add(1, Attributes.builder()
+      .put("method", if (i % 2 == 0) "POST" else "GET")
+      .put("status", if (i % 2 == 0) "201" else "200")
+      .build()
+    )
+    println(s"Recorded metric for iteration $i")
+  }
+
+} catch {
+  case e: Exception =>
+    println(s"Error recording metrics: ${e.getMessage}")
+}
+
+// =============================================================
+// 5. Allow Export
+// =============================================================
+println("Waiting 65 seconds for metrics to export to Application Insights...")
+Thread.sleep(65000) // must be >= metric export interval (default ~60s)
+
+println("Done. Check your Application Insights 'customMetrics' table for recorded values.")
