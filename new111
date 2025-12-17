@@ -1,61 +1,142 @@
-import com.azure.monitor.opentelemetry.autoconfigure.AzureMonitorAutoconfigure
-import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.trace.Tracer
+Conversation opened. 1 unread message.
+
+Skip to content
+Using Gmail with screen readers
+Enable desktop notifications for Gmail.
+   OK  No thanks
+1 of 185
+Poc
+Inbox
+
+namrata kasana <kasananamrata017@gmail.com>
+5:47 PM (0 minutes ago)
+to me
+
+%scala
+// ==============================
+// Imports
+// ==============================
+import io.opentelemetry.api.{GlobalOpenTelemetry, OpenTelemetry}
+import io.opentelemetry.api.trace.{Tracer, Span}
 import io.opentelemetry.api.common.Attributes
-import io.opentelemetry.api.metrics.Meter
-import io.opentelemetry.api.metrics.common.Labels
+import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
+import com.azure.monitor.opentelemetry.autoconfigure.AzureMonitorAutoConfigure
 
-object DatabricksAzureMonitorTest {
+import java.util.concurrent.TimeUnit
 
-  def main(args: Array[String]): Unit = {
+// ==============================
+// CONFIGURATION
+// ==============================
 
-    try {
-      println("=== Initializing Azure Monitor Autoconfigure ===")
+// Prefer environment variable in Databricks
+// spark.conf.set("spark.databricks.env.APPLICATIONINSIGHTS_CONNECTION_STRING", "<your-connection-string>")
 
-      // This reads env vars automatically and sets up SDK + exporters
-      AzureMonitorAutoconfigure.initialize()
+val CONNECTION_STRING =
+sys.env.getOrElse(
+"APPLICATIONINSIGHTS_CONNECTION_STRING",
+throw new RuntimeException("APPLICATIONINSIGHTS_CONNECTION_STRING not set")
+)
 
-      println("Azure Monitor OpenTelemetry initialized successfully")
+// ==============================
+// OpenTelemetry + Azure Monitor Setup
+// ==============================
 
-      val tracer: Tracer = GlobalOpenTelemetry.getTracer("databricks-otel-tracer")
-      val meter: Meter = GlobalOpenTelemetry.getMeter("databricks-otel-meter")
+val sdkBuilder = AutoConfiguredOpenTelemetrySdk.builder()
 
-      // Send 5 test spans
-      for (i <- 1 to 5) {
-        val span = tracer.spanBuilder(s"custom-span-$i")
-          .setAttribute("iteration", i)
-          .startSpan()
+// Attach Azure Monitor exporter
+AzureMonitorAutoConfigure.customize(sdkBuilder, CONNECTION_STRING)
 
-        span.addEvent(
-          "custom-event",
-          Attributes.builder()
-            .put("source", "databricks")
-            .put("iteration", i)
-            .build()
-        )
+// Build SDK
+val openTelemetrySdk = sdkBuilder.build().getOpenTelemetrySdk()
 
-        Thread.sleep(200)
-        span.end()
-        println(s"Sent span $i")
-      }
+// Register globally (IMPORTANT)
+GlobalOpenTelemetry.set(openTelemetrySdk)
 
-      // Send a simple custom metric
-      val counter = meter.counterBuilder("databricks_custom_counter")
-        .setDescription("Demo custom metric")
-        .setUnit("1")
-        .build()
-
-      counter.add(10, Labels.of("env", "databricks"))
-      println("Custom metric sent")
-
-      // Allow time for telemetry export
-      Thread.sleep(5000)
-      println("All telemetry sent successfully!")
-
-    } catch {
-      case ex: Throwable =>
-        println("❌ Error initializing Azure Monitor OpenTelemetry")
-        ex.printStackTrace()
-    }
-  }
+// Ensure flush on Databricks job termination
+sys.addShutdownHook {
+openTelemetrySdk
+.getSdkTracerProvider
+.forceFlush()
+.join(10, TimeUnit.SECONDS)
 }
+
+// ==============================
+// Telemetry Data Model
+// ==============================
+
+case class NonNativeJobTelemetryData(
+eventName: String,
+properties: Map[String, String],
+metrics: Map[String, Double],
+status: String,
+subSystem: Option[String]
+)
+
+// ==============================
+// Sample Telemetry Payload
+// ==============================
+
+val telemetryData = NonNativeJobTelemetryData(
+eventName = "nn_event",
+properties = Map(
+"component_name" -> "dbx-non-native-raw",
+"source" -> "AT27359",
+"last_updated_time" -> "2025-12-05 09:36:53 UTC",
+"status" -> "DONE",
+"sub_system" -> "non-native"
+),
+metrics = Map(
+"elapsed" -> 390050.0
+),
+status = "DONE",
+subSystem = Some("non-native")
+)
+
+// ==============================
+// Tracer
+// ==============================
+
+val tracer: Tracer =
+openTelemetrySdk.getTracer("custom-event-tracer")
+
+// ==============================
+// Send Custom Event
+// ==============================
+
+def sendCustomEvent(data: NonNativeJobTelemetryData): Unit = {
+
+val attrBuilder = Attributes.builder()
+
+// Add properties
+data.properties.foreach {
+case (k, v) => attrBuilder.put(k, v)
+}
+
+// Add metrics
+data.metrics.foreach {
+case (k, v) => attrBuilder.put(k, v)
+}
+
+// Add top-level attributes
+attrBuilder.put("job_status", data.status)
+attrBuilder.put("sub_system", data.subSystem.getOrElse("unknown"))
+
+val attributes = attrBuilder.build()
+
+val span: Span =
+tracer
+.spanBuilder(data.eventName)
+.setAllAttributes(attributes)
+.startSpan()
+
+// End immediately (event-style span)
+span.end()
+}
+
+// ==============================
+// Emit Telemetry
+// ==============================
+
+sendCustomEvent(telemetryData)
+
+println("Custom telemetry event sent to Azure Application Insights")
