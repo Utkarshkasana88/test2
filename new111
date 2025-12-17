@@ -1,142 +1,141 @@
-Conversation opened. 1 unread message.
-
-Skip to content
-Using Gmail with screen readers
-Enable desktop notifications for Gmail.
-   OK  No thanks
-1 of 185
-Poc
-Inbox
-
-namrata kasana <kasananamrata017@gmail.com>
-5:47 PM (0 minutes ago)
-to me
-
-%scala
-// ==============================
+// =======================================
 // Imports
-// ==============================
-import io.opentelemetry.api.{GlobalOpenTelemetry, OpenTelemetry}
+// =======================================
+import io.opentelemetry.api.GlobalOpenTelemetry
 import io.opentelemetry.api.trace.{Tracer, Span}
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
+
 import com.azure.monitor.opentelemetry.autoconfigure.AzureMonitorAutoConfigure
 
 import java.util.concurrent.TimeUnit
 
-// ==============================
-// CONFIGURATION
-// ==============================
-
-// Prefer environment variable in Databricks
-// spark.conf.set("spark.databricks.env.APPLICATIONINSIGHTS_CONNECTION_STRING", "<your-connection-string>")
-
+// =======================================
+// Read Connection String
+// =======================================
 val CONNECTION_STRING =
-sys.env.getOrElse(
-"APPLICATIONINSIGHTS_CONNECTION_STRING",
-throw new RuntimeException("APPLICATIONINSIGHTS_CONNECTION_STRING not set")
-)
+  sys.env.getOrElse(
+    "APPLICATIONINSIGHTS_CONNECTION_STRING",
+    throw new RuntimeException("APPLICATIONINSIGHTS_CONNECTION_STRING not set")
+  )
 
-// ==============================
-// OpenTelemetry + Azure Monitor Setup
-// ==============================
+// =======================================
+// OpenTelemetry + Azure Monitor setup
+// =======================================
+println("Initializing OpenTelemetry with Azure Monitor...")
 
 val sdkBuilder = AutoConfiguredOpenTelemetrySdk.builder()
 
-// Attach Azure Monitor exporter
+// ✅ REQUIRED: Azure Monitor customization
 AzureMonitorAutoConfigure.customize(sdkBuilder, CONNECTION_STRING)
 
 // Build SDK
-val openTelemetrySdk = sdkBuilder.build().getOpenTelemetrySdk()
+val openTelemetrySdk =
+  sdkBuilder.build().getOpenTelemetrySdk()
 
-// Register globally (IMPORTANT)
+// Register globally
 GlobalOpenTelemetry.set(openTelemetrySdk)
 
-// Ensure flush on Databricks job termination
+println(
+  "OpenTelemetry initialized: " +
+    GlobalOpenTelemetry.get().getClass.getName
+)
+
+// =======================================
+// Flush on Databricks shutdown
+// =======================================
 sys.addShutdownHook {
-openTelemetrySdk
-.getSdkTracerProvider
-.forceFlush()
-.join(10, TimeUnit.SECONDS)
+  println("Flushing telemetry...")
+  try {
+    openTelemetrySdk
+      .getSdkTracerProvider
+      .forceFlush()
+      .join(10, TimeUnit.SECONDS)
+
+    openTelemetrySdk
+      .getSdkTracerProvider
+      .shutdown()
+  } catch {
+    case e: Throwable =>
+      println("Flush failed: " + e.getMessage)
+  }
 }
 
-// ==============================
-// Telemetry Data Model
-// ==============================
-
-case class NonNativeJobTelemetryData(
-eventName: String,
-properties: Map[String, String],
-metrics: Map[String, Double],
-status: String,
-subSystem: Option[String]
+// =======================================
+// Telemetry data model
+// =======================================
+case class CustomEventData(
+  eventName: String,
+  properties: Map[String, String],
+  metrics: Map[String, Double]
 )
 
-// ==============================
-// Sample Telemetry Payload
-// ==============================
-
-val telemetryData = NonNativeJobTelemetryData(
-eventName = "nn_event",
-properties = Map(
-"component_name" -> "dbx-non-native-raw",
-"source" -> "AT27359",
-"last_updated_time" -> "2025-12-05 09:36:53 UTC",
-"status" -> "DONE",
-"sub_system" -> "non-native"
-),
-metrics = Map(
-"elapsed" -> 390050.0
-),
-status = "DONE",
-subSystem = Some("non-native")
+// =======================================
+// Sample payload
+// =======================================
+val eventData = CustomEventData(
+  eventName = "nn_event",
+  properties = Map(
+    "component_name" -> "dbx-non-native-raw",
+    "source" -> "AT27359",
+    "status" -> "DONE",
+    "sub_system" -> "non-native"
+  ),
+  metrics = Map(
+    "elapsed_ms" -> 390050.0,
+    "records_processed" -> 1200.0
+  )
 )
 
-// ==============================
+// =======================================
 // Tracer
-// ==============================
-
+// =======================================
 val tracer: Tracer =
-openTelemetrySdk.getTracer("custom-event-tracer")
+  GlobalOpenTelemetry.get()
+    .getTracer("databricks.custom.event")
 
-// ==============================
-// Send Custom Event
-// ==============================
+// =======================================
+// Send CUSTOM EVENT (App Insights customEvents)
+// =======================================
+def sendCustomEvent(data: CustomEventData): Unit = {
 
-def sendCustomEvent(data: NonNativeJobTelemetryData): Unit = {
+  println(s"Sending custom event: ${data.eventName}")
 
-val attrBuilder = Attributes.builder()
+  val attributesBuilder = Attributes.builder()
 
-// Add properties
-data.properties.foreach {
-case (k, v) => attrBuilder.put(k, v)
+  // Properties → customDimensions
+  data.properties.foreach {
+    case (k, v) => attributesBuilder.put(k, v)
+  }
+
+  // Metrics → customMeasurements
+  data.metrics.foreach {
+    case (k, v) => attributesBuilder.put(k, v)
+  }
+
+  val attributes = attributesBuilder.build()
+
+  // Parent span (required)
+  val span: Span =
+    tracer.spanBuilder("event-parent-span").startSpan()
+
+  try {
+    // ✅ This creates Application Insights customEvent
+    span.addEvent(data.eventName, attributes)
+  } catch {
+    case e: Exception =>
+      span.recordException(e)
+      throw e
+  } finally {
+    span.end()
+  }
+
+  println("Custom event sent successfully")
 }
 
-// Add metrics
-data.metrics.foreach {
-case (k, v) => attrBuilder.put(k, v)
-}
+// =======================================
+// Emit telemetry
+// =======================================
+sendCustomEvent(eventData)
 
-// Add top-level attributes
-attrBuilder.put("job_status", data.status)
-attrBuilder.put("sub_system", data.subSystem.getOrElse("unknown"))
-
-val attributes = attrBuilder.build()
-
-val span: Span =
-tracer
-.spanBuilder(data.eventName)
-.setAllAttributes(attributes)
-.startSpan()
-
-// End immediately (event-style span)
-span.end()
-}
-
-// ==============================
-// Emit Telemetry
-// ==============================
-
-sendCustomEvent(telemetryData)
-
-println("Custom telemetry event sent to Azure Application Insights")
+println("Done")
