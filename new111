@@ -1,7 +1,2 @@
-try {
-  Class.forName("com.microsoft.applicationinsights.TelemetryConfiguration")
-  println("✅ TelemetryConfiguration is present")
-} catch {
-  case e: ClassNotFoundException =>
-    println("❌ TelemetryConfiguration NOT found")
-}
+v--conf "spark.driver.extraJavaOptions=-Dapplicationinsights.connection.string=InstrumentationKey=xxxxxx;IngestionEndpoint=xxxx"
+--conf "spark.executor.extraJavaOptions=-Dapplicationinsights.connection.string=InstrumentationKey=xxxxxx;IngestionEndpoint=xxxx"
