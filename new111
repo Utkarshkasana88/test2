@@ -1,64 +1,85 @@
-// =======================================
+// ===================================================
+// Azure Application Insights – Databricks Scala
+// Custom Event + Properties + Metrics + Debug
+// ===================================================
+
+// ---------------------------
 // Imports
-// =======================================
+// ---------------------------
 import com.microsoft.applicationinsights.TelemetryClient
-import com.microsoft.applicationinsights.TelemetryConfiguration
 import com.microsoft.applicationinsights.telemetry.EventTelemetry
 
-import scala.collection.JavaConverters._
-import java.util.concurrent.TimeUnit
+import java.util.logging.{Level, Logger}
 
-// =======================================
-// Initialize Application Insights
-// =======================================
+// ---------------------------
+// Enable SDK Debug Logging
+// ---------------------------
+Logger.getLogger("com.microsoft.applicationinsights").setLevel(Level.ALL)
+Logger.getLogger("com.microsoft.applicationinsights.channel").setLevel(Level.ALL)
+Logger.getLogger("com.microsoft.applicationinsights.core").setLevel(Level.ALL)
+
+println("✅ Application Insights logging enabled")
+
+// ---------------------------
+// Verify connection string
+// ---------------------------
 val connectionString =
   sys.env.getOrElse(
     "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    throw new RuntimeException("APPLICATIONINSIGHTS_CONNECTION_STRING not set")
+    throw new RuntimeException("❌ APPLICATIONINSIGHTS_CONNECTION_STRING not set")
   )
 
-val config = TelemetryConfiguration.getActive()
-config.setConnectionString(connectionString)
+println("✅ Connection string detected")
 
-// Optional: set role name (service name)
-config.setRoleName("databricks-scala-appinsights")
+// ---------------------------
+// Initialize Telemetry Client
+// ---------------------------
+val telemetryClient = new TelemetryClient()
 
-val telemetryClient = new TelemetryClient(config)
+// Optional: set cloud role name (shows as service name)
+telemetryClient.getContext.getCloud.setRoleName("databricks-scala-ai")
 
-println("Application Insights TelemetryClient initialized")
+println("✅ TelemetryClient initialized")
 
-// =======================================
-// Send Custom Event
-// =======================================
+// ---------------------------
+// Function to send custom event
+// ---------------------------
 def sendCustomEvent(
   eventName: String,
   properties: Map[String, String],
   metrics: Map[String, Double]
 ): Unit = {
 
+  println(s"➡ Sending event: $eventName")
+
   val event = new EventTelemetry(eventName)
 
   // Properties → customDimensions
   properties.foreach {
-    case (k, v) => event.getProperties.put(k, v)
+    case (k, v) =>
+      event.getProperties.put(k, v)
+      println(s"   property: $k = $v")
   }
 
   // Metrics → customMeasurements
   metrics.foreach {
-    case (k, v) => event.getMetrics.put(k, v)
+    case (k, v) =>
+      event.getMetrics.put(k, v)
+      println(s"   metric: $k = $v")
   }
 
   telemetryClient.trackEvent(event)
-  telemetryClient.flush()
+  println("✔ Event queued")
 
-  println(s"Custom event '$eventName' sent")
+  telemetryClient.flush()
+  println("✔ Flush called")
 }
 
-// =======================================
-// Example payload
-// =======================================
+// ---------------------------
+// Send Sample Event
+// ---------------------------
 sendCustomEvent(
-  eventName = "nn_event",
+  eventName = "nn_event_debug",
   properties = Map(
     "component_name" -> "dbx-non-native-raw",
     "source" -> "AT27359",
@@ -71,9 +92,10 @@ sendCustomEvent(
   )
 )
 
-// =======================================
-// Give time to flush (Databricks exits fast)
-// =======================================
-Thread.sleep(5000)
+// ---------------------------
+// VERY IMPORTANT (Databricks exits fast)
+// ---------------------------
+println("⏳ Sleeping 15 seconds to allow ingestion...")
+Thread.sleep(15000)
 
-println("Done")
+println("✅ Done – check Application Insights")
