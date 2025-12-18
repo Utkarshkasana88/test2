@@ -1,79 +1,63 @@
 // =======================================
 // Imports
 // =======================================
-import io.opentelemetry.api.GlobalOpenTelemetry
-import io.opentelemetry.api.trace.{Tracer, Span}
-import io.opentelemetry.api.common.Attributes
-import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
+import com.microsoft.applicationinsights.TelemetryClient
+import com.microsoft.applicationinsights.TelemetryConfiguration
+import com.microsoft.applicationinsights.telemetry.EventTelemetry
 
-import com.azure.monitor.opentelemetry.autoconfigure.AzureMonitorAutoConfigure
-
+import scala.collection.JavaConverters._
 import java.util.concurrent.TimeUnit
 
 // =======================================
-// Read Connection String
+// Initialize Application Insights
 // =======================================
-val CONNECTION_STRING =
+val connectionString =
   sys.env.getOrElse(
     "APPLICATIONINSIGHTS_CONNECTION_STRING",
     throw new RuntimeException("APPLICATIONINSIGHTS_CONNECTION_STRING not set")
   )
 
-// =======================================
-// OpenTelemetry + Azure Monitor setup
-// =======================================
-println("Initializing OpenTelemetry with Azure Monitor...")
+val config = TelemetryConfiguration.getActive()
+config.setConnectionString(connectionString)
 
-val sdkBuilder = AutoConfiguredOpenTelemetrySdk.builder()
+// Optional: set role name (service name)
+config.setRoleName("databricks-scala-appinsights")
 
-// ✅ REQUIRED: Azure Monitor customization
-AzureMonitorAutoConfigure.customize(sdkBuilder, CONNECTION_STRING)
+val telemetryClient = new TelemetryClient(config)
 
-// Build SDK
-val openTelemetrySdk =
-  sdkBuilder.build().getOpenTelemetrySdk()
-
-// Register globally
-GlobalOpenTelemetry.set(openTelemetrySdk)
-
-println(
-  "OpenTelemetry initialized: " +
-    GlobalOpenTelemetry.get().getClass.getName
-)
+println("Application Insights TelemetryClient initialized")
 
 // =======================================
-// Flush on Databricks shutdown
+// Send Custom Event
 // =======================================
-sys.addShutdownHook {
-  println("Flushing telemetry...")
-  try {
-    openTelemetrySdk
-      .getSdkTracerProvider
-      .forceFlush()
-      .join(10, TimeUnit.SECONDS)
-
-    openTelemetrySdk
-      .getSdkTracerProvider
-      .shutdown()
-  } catch {
-    case e: Throwable =>
-      println("Flush failed: " + e.getMessage)
-  }
-}
-
-// =======================================
-// Telemetry data model
-// =======================================
-case class CustomEventData(
+def sendCustomEvent(
   eventName: String,
   properties: Map[String, String],
   metrics: Map[String, Double]
-)
+): Unit = {
+
+  val event = new EventTelemetry(eventName)
+
+  // Properties → customDimensions
+  properties.foreach {
+    case (k, v) => event.getProperties.put(k, v)
+  }
+
+  // Metrics → customMeasurements
+  metrics.foreach {
+    case (k, v) => event.getMetrics.put(k, v)
+  }
+
+  telemetryClient.trackEvent(event)
+  telemetryClient.flush()
+
+  println(s"Custom event '$eventName' sent")
+}
 
 // =======================================
-// Sample payload
+// Example payload
 // =======================================
-val eventData = CustomEventData(
+sendCustomEvent(
   eventName = "nn_event",
   properties = Map(
     "component_name" -> "dbx-non-native-raw",
@@ -88,54 +72,8 @@ val eventData = CustomEventData(
 )
 
 // =======================================
-// Tracer
+// Give time to flush (Databricks exits fast)
 // =======================================
-val tracer: Tracer =
-  GlobalOpenTelemetry.get()
-    .getTracer("databricks.custom.event")
-
-// =======================================
-// Send CUSTOM EVENT (App Insights customEvents)
-// =======================================
-def sendCustomEvent(data: CustomEventData): Unit = {
-
-  println(s"Sending custom event: ${data.eventName}")
-
-  val attributesBuilder = Attributes.builder()
-
-  // Properties → customDimensions
-  data.properties.foreach {
-    case (k, v) => attributesBuilder.put(k, v)
-  }
-
-  // Metrics → customMeasurements
-  data.metrics.foreach {
-    case (k, v) => attributesBuilder.put(k, v)
-  }
-
-  val attributes = attributesBuilder.build()
-
-  // Parent span (required)
-  val span: Span =
-    tracer.spanBuilder("event-parent-span").startSpan()
-
-  try {
-    // ✅ This creates Application Insights customEvent
-    span.addEvent(data.eventName, attributes)
-  } catch {
-    case e: Exception =>
-      span.recordException(e)
-      throw e
-  } finally {
-    span.end()
-  }
-
-  println("Custom event sent successfully")
-}
-
-// =======================================
-// Emit telemetry
-// =======================================
-sendCustomEvent(eventData)
+Thread.sleep(5000)
 
 println("Done")
