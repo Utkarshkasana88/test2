@@ -1,101 +1,159 @@
-// ===================================================
-// Azure Application Insights – Databricks Scala
-// Custom Event + Properties + Metrics + Debug
-// ===================================================
+✅ STEP 1 — VERIFY CONNECTION STRING IS ACTUALLY USED
 
-// ---------------------------
-// Imports
-// ---------------------------
+Run THIS EXACT CELL in Databricks:
+
+println("ENV VAR = " + sys.env.get("APPLICATIONINSIGHTS_CONNECTION_STRING"))
+
+✅ Expected
+Some(InstrumentationKey=...;IngestionEndpoint=...)
+
+❌ If you see
+None
+
+
+➡ STOP
+You must set it at cluster level:
+
+Cluster → Advanced → Environment Variables
+
+APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxxx;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/
+
+
+➡ Restart cluster
+➡ Re-run notebook
+
+✅ STEP 2 — VERIFY YOU ARE QUERYING THE RIGHT RESOURCE
+
+This is a very common mistake.
+
+Check:
+
+Are you opening Application Insights (not Log Analytics)?
+
+Is it the same resource whose InstrumentationKey you used?
+
+Run this query in Logs:
+union customEvents, traces, requests
+| order by timestamp desc
+
+
+If empty → continue.
+
+✅ STEP 3 — FORCE A SIMPLE TRACE (NOT EVENT)
+
+Events are optional; traces are the simplest signal.
+
+Run this minimal test:
+
 import com.microsoft.applicationinsights.TelemetryClient
-import com.microsoft.applicationinsights.telemetry.EventTelemetry
 
-import java.util.logging.{Level, Logger}
+val tc = new TelemetryClient()
+tc.trackTrace("🔥 databricks-trace-test")
+tc.flush()
 
-// ---------------------------
-// Enable SDK Debug Logging
-// ---------------------------
-Logger.getLogger("com.microsoft.applicationinsights").setLevel(Level.ALL)
-Logger.getLogger("com.microsoft.applicationinsights.channel").setLevel(Level.ALL)
-Logger.getLogger("com.microsoft.applicationinsights.core").setLevel(Level.ALL)
-
-println("✅ Application Insights logging enabled")
-
-// ---------------------------
-// Verify connection string
-// ---------------------------
-val connectionString =
-  sys.env.getOrElse(
-    "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    throw new RuntimeException("❌ APPLICATIONINSIGHTS_CONNECTION_STRING not set")
-  )
-
-println("✅ Connection string detected")
-
-// ---------------------------
-// Initialize Telemetry Client
-// ---------------------------
-val telemetryClient = new TelemetryClient()
-
-// Optional: set cloud role name (shows as service name)
-telemetryClient.getContext.getCloud.setRoleName("databricks-scala-ai")
-
-println("✅ TelemetryClient initialized")
-
-// ---------------------------
-// Function to send custom event
-// ---------------------------
-def sendCustomEvent(
-  eventName: String,
-  properties: Map[String, String],
-  metrics: Map[String, Double]
-): Unit = {
-
-  println(s"➡ Sending event: $eventName")
-
-  val event = new EventTelemetry(eventName)
-
-  // Properties → customDimensions
-  properties.foreach {
-    case (k, v) =>
-      event.getProperties.put(k, v)
-      println(s"   property: $k = $v")
-  }
-
-  // Metrics → customMeasurements
-  metrics.foreach {
-    case (k, v) =>
-      event.getMetrics.put(k, v)
-      println(s"   metric: $k = $v")
-  }
-
-  telemetryClient.trackEvent(event)
-  println("✔ Event queued")
-
-  telemetryClient.flush()
-  println("✔ Flush called")
-}
-
-// ---------------------------
-// Send Sample Event
-// ---------------------------
-sendCustomEvent(
-  eventName = "nn_event_debug",
-  properties = Map(
-    "component_name" -> "dbx-non-native-raw",
-    "source" -> "AT27359",
-    "status" -> "DONE",
-    "sub_system" -> "non-native"
-  ),
-  metrics = Map(
-    "elapsed_ms" -> 390050.0,
-    "records_processed" -> 1200.0
-  )
-)
-
-// ---------------------------
-// VERY IMPORTANT (Databricks exits fast)
-// ---------------------------
-println("⏳ Sleeping 15 seconds to allow ingestion...")
 Thread.sleep(15000)
 
-println("✅ Done – check Application Insights")
+println("Trace sent")
+
+
+Now query:
+
+traces
+| where message contains "databricks-trace-test"
+| order by timestamp desc
+
+❌ If still nothing → ingestion/network issue confirmed.
+✅ STEP 4 — TEST AZURE MONITOR ENDPOINT CONNECTIVITY (CRITICAL)
+
+Databricks often blocks outbound telemetry.
+
+Run:
+
+import java.net.URL
+import scala.util.Try
+
+Try {
+  new URL("https://dc.services.visualstudio.com/v2/track").openConnection().connect()
+}.fold(
+  err => println("❌ CANNOT CONNECT: " + err.getMessage),
+  _   => println("✅ Azure Monitor endpoint reachable")
+)
+
+❌ If you see:
+CANNOT CONNECT
+
+
+➡ THIS IS THE ROOT CAUSE
+
+Fix required:
+
+Enable outbound HTTPS (443)
+
+If VNet injected → NAT Gateway required
+
+Azure Monitor endpoints must be reachable
+
+📌 No SDK or code change can fix this
+
+✅ STEP 5 — ENABLE INTERNAL SDK DIAGNOSTICS
+
+Add before creating TelemetryClient:
+
+System.setProperty("applicationinsights.debug", "true")
+
+
+Then re-run and check Driver Logs.
+
+You should see logs like:
+
+Transmission succeeded
+Sending telemetry to ...
+
+
+If you see retries or drops → network.
+
+✅ STEP 6 — CONFIRM SDK VERSION IS LOADED
+
+Run:
+
+import com.microsoft.applicationinsights.BuildInfo
+println(BuildInfo.VERSION)
+
+
+Expected:
+
+3.7.6
+
+
+If this throws → jar not loaded correctly.
+
+🚨 MOST COMMON ROOT CAUSE (90% CASES)
+
+Databricks outbound internet is blocked
+
+Especially true if:
+
+VNet injected workspace
+
+Private endpoints
+
+No NAT gateway
+
+📌 Application Insights ingestion requires public outbound HTTPS
+
+✅ FINAL DECISION TREE
+Test	Result	Meaning
+ENV var missing	❌	Misconfigured cluster
+Trace not visible	❌	Ingestion blocked
+URL connect fails	❌	Network issue
+Logs show retries	❌	Firewall / NAT
+All pass but no data	❌	Wrong AppInsights resource
+🔥 Be honest with me:
+
+Reply with only this:
+
+1️⃣ ENV var output
+2️⃣ URL connectivity result
+3️⃣ Trace query result
+
+I will tell you exactly what is wrong and how to fix it.
